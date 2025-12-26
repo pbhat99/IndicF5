@@ -1,0 +1,3 @@
+https://huggingface.co/ai4bharat/IndicF5/blob/main/model.safetensors
+
+https://huggingface.co/ai4bharat/IndicF5/tree/main

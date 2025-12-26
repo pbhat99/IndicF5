@@ -174,3 +174,4 @@ cython_debug/
 .pypirc
 #model/
 batch_outputs/
+model/model.safetensors
