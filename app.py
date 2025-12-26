@@ -226,7 +226,8 @@ def load_examples():
         label = os.path.splitext(wav_file)[0]
         
         # Example format: [label, text_to_synthesize_placeholder, ref_audio_path, ref_text, language]
-        examples.append([label, "", wav_path, ref_text, "Auto"])
+        # Use None instead of "" for the text/file input placeholder to avoid PermissionError on gr.File
+        examples.append([label, None, wav_path, ref_text, "Auto"])
         
     return examples
 
