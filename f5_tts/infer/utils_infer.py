@@ -134,7 +134,7 @@ def load_vocoder(vocoder_name="vocos", is_local=False, local_path="", device=dev
 asr_pipe = None
 
 
-def initialize_asr_pipeline(device: str = device, dtype=None):
+def initialize_asr_pipeline(device: str = device, dtype=None, hf_cache_dir=None, model_path=None):
     if dtype is None:
         dtype = (
             torch.float16
@@ -144,21 +144,23 @@ def initialize_asr_pipeline(device: str = device, dtype=None):
             else torch.float32
         )
     global asr_pipe
+    model_name = model_path if model_path else "openai/whisper-large-v3-turbo"
     asr_pipe = pipeline(
         "automatic-speech-recognition",
-        model="openai/whisper-large-v3-turbo",
+        model=model_name,
         torch_dtype=dtype,
         device=device,
+        model_kwargs={"cache_dir": hf_cache_dir} if hf_cache_dir and not model_path else {},
     )
 
 
 # transcribe
 
 
-def transcribe(ref_audio, language=None):
+def transcribe(ref_audio, language=None, hf_cache_dir=None, model_path=None):
     global asr_pipe
     if asr_pipe is None:
-        initialize_asr_pipeline(device=device)
+        initialize_asr_pipeline(device=device, hf_cache_dir=hf_cache_dir, model_path=model_path)
     return asr_pipe(
         ref_audio,
         chunk_length_s=30,
@@ -194,11 +196,17 @@ def load_checkpoint(model, ckpt_path, device: str, dtype=None, use_ema=True):
     if use_ema:
         if ckpt_type == "safetensors":
             checkpoint = {"ema_model_state_dict": checkpoint}
-        checkpoint["model_state_dict"] = {
-            k.replace("ema_model.", ""): v
-            for k, v in checkpoint["ema_model_state_dict"].items()
-            if k not in ["initted", "step"]
-        }
+        
+        checkpoint["model_state_dict"] = {}
+        for k, v in checkpoint["ema_model_state_dict"].items():
+            if k in ["initted", "step"]:
+                continue
+            
+            new_key = k.replace("ema_model.", "").replace("_orig_mod.", "")
+            if new_key.startswith("vocoder."):
+                continue
+            
+            checkpoint["model_state_dict"][new_key] = v
 
         # patch for backward compatibility, 305e3ea
         for key in ["mel_spec.mel_stft.mel_scale.fb", "mel_spec.mel_stft.spectrogram.window"]:
@@ -223,6 +231,7 @@ def load_checkpoint(model, ckpt_path, device: str, dtype=None, use_ema=True):
 def load_model(
     model_cls,
     model_cfg,
+    ckpt_path,
     mel_spec_type=mel_spec_type,
     vocab_file="",
     ode_method=ode_method,
@@ -254,7 +263,7 @@ def load_model(
     ).to(device)
 
     dtype = torch.float32 if mel_spec_type == "bigvgan" else None
-    # model = load_checkpoint(model, ckpt_path, device, dtype=dtype, use_ema=use_ema)
+    model = load_checkpoint(model, ckpt_path, device, dtype=dtype, use_ema=use_ema)
 
     return model
 
@@ -278,7 +287,7 @@ def remove_silence_edges(audio, silence_threshold=-42):
 # preprocess reference audio and text
 
 
-def preprocess_ref_audio_text(ref_audio_orig, ref_text, clip_short=True, show_info=print, device=device):
+def preprocess_ref_audio_text(ref_audio_orig, ref_text, clip_short=True, show_info=print, device=device, hf_cache_dir=None, model_path=None):
     # show_info("Converting audio...")
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         aseg = AudioSegment.from_file(ref_audio_orig)
@@ -331,7 +340,7 @@ def preprocess_ref_audio_text(ref_audio_orig, ref_text, clip_short=True, show_in
             ref_text = _ref_audio_cache[audio_hash]
         else:
             show_info("No reference text provided, transcribing reference audio...")
-            ref_text = transcribe(ref_audio)
+            ref_text = transcribe(ref_audio, hf_cache_dir=hf_cache_dir, model_path=model_path)
             # Cache the transcribed text (not caching custom ref_text, enabling users to do manual tweak)
             _ref_audio_cache[audio_hash] = ref_text
     else:
@@ -372,7 +381,14 @@ def infer_process(
     device=device,
 ):
     # Split the input text into batches
-    audio, sr = torchaudio.load(ref_audio)
+    import soundfile as sf
+    audio_np, sr = sf.read(ref_audio)
+    if len(audio_np.shape) == 1:
+        audio_np = audio_np[None, :]
+    else:
+        audio_np = audio_np.T
+    audio = torch.from_numpy(audio_np).to(dtype=torch.float32)
+
     max_chars = int(len(ref_text.encode("utf-8")) / (audio.shape[-1] / sr) * (25 - audio.shape[-1] / sr))
     gen_text_batches = chunk_text(gen_text, max_chars=max_chars)
     # for i, gen_text in enumerate(gen_text_batches):

@@ -12,6 +12,16 @@ from f5_tts.eval.ecapa_tdnn import ECAPA_TDNN_SMALL
 from f5_tts.model.modules import MelSpec
 from f5_tts.model.utils import convert_char_to_pinyin
 
+import soundfile as sf
+def load_audio(path):
+    audio_np, sr = sf.read(path)
+    if len(audio_np.shape) == 1:
+        audio_np = audio_np[None, :]
+    else:
+        audio_np = audio_np.T
+    audio = torch.from_numpy(audio_np).float()
+    return audio, sr
+
 
 # seedtts testset metainfo: utt, prompt_text, prompt_wav, gt_text, gt_wav
 def get_seedtts_testset_metainfo(metalst):
@@ -107,7 +117,7 @@ def get_inference_prompt(
 
     for utt, prompt_text, prompt_wav, gt_text, gt_wav in tqdm(metainfo, desc="Processing prompts..."):
         # Audio
-        ref_audio, ref_sr = torchaudio.load(prompt_wav)
+        ref_audio, ref_sr = load_audio(prompt_wav)
         ref_rms = torch.sqrt(torch.mean(torch.square(ref_audio)))
         if ref_rms < target_rms:
             ref_audio = ref_audio * target_rms / ref_rms
@@ -128,7 +138,7 @@ def get_inference_prompt(
         # Duration, mel frame length
         ref_mel_len = ref_audio.shape[-1] // hop_length
         if use_truth_duration:
-            gt_audio, gt_sr = torchaudio.load(gt_wav)
+            gt_audio, gt_sr = load_audio(gt_wav)
             if gt_sr != target_sample_rate:
                 resampler = torchaudio.transforms.Resample(gt_sr, target_sample_rate)
                 gt_audio = resampler(gt_audio)
@@ -383,8 +393,8 @@ def run_sim(args):
 
     sim_list = []
     for wav1, wav2, truth in tqdm(test_set):
-        wav1, sr1 = torchaudio.load(wav1)
-        wav2, sr2 = torchaudio.load(wav2)
+        wav1, sr1 = load_audio(wav1)
+        wav2, sr2 = load_audio(wav2)
 
         resample1 = torchaudio.transforms.Resample(orig_freq=sr1, new_freq=16000)
         resample2 = torchaudio.transforms.Resample(orig_freq=sr2, new_freq=16000)

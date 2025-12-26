@@ -18,9 +18,12 @@ torch>=2.0.0
 torchaudio>=2.0.0
 torchdiffeq
 tqdm>=4.65.0
-transformers<4.50
+transformers==4.49.0
+torchcodec==0.7.*
 transformers_stream_generator
 vocos
 wandb
 x_transformers>=1.31.14
-
+gradio
+huggingface_hub
+ffmpeg

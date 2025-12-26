@@ -33,6 +33,7 @@ class F5TTS:
         local_path=None,
         device=None,
         hf_cache_dir=None,
+        asr_model_path=None,
     ):
         # Initialize parameters
         self.final_wave = None
@@ -40,6 +41,8 @@ class F5TTS:
         self.hop_length = hop_length
         self.seed = -1
         self.mel_spec_type = vocoder_name
+        self.hf_cache_dir = hf_cache_dir
+        self.asr_model_path = asr_model_path
 
         # Set device
         if device is not None:
@@ -61,12 +64,15 @@ class F5TTS:
     def load_ema_model(self, model_type, ckpt_file, mel_spec_type, vocab_file, ode_method, use_ema, hf_cache_dir=None):
         if model_type == "F5-TTS":
             if not ckpt_file:
+                # Default to cached path if not provided, but warn or fail if independent mode preferred
                 if mel_spec_type == "vocos":
-                    ckpt_file = str(
+                     # Fallback to HF only if absolutely necessary, but prefer explicit paths
+                     print("Warning: No checkpoint file provided. Attempting to use default HF path.")
+                     ckpt_file = str(
                         cached_path("hf://SWivid/F5-TTS/F5TTS_Base/model_1200000.safetensors", cache_dir=hf_cache_dir)
                     )
                 elif mel_spec_type == "bigvgan":
-                    ckpt_file = str(
+                     ckpt_file = str(
                         cached_path("hf://SWivid/F5-TTS/F5TTS_Base_bigvgan/model_1250000.pt", cache_dir=hf_cache_dir)
                     )
             model_cfg = dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4)
@@ -86,7 +92,7 @@ class F5TTS:
         )
 
     def transcribe(self, ref_audio, language=None):
-        return transcribe(ref_audio, language)
+        return transcribe(ref_audio, language, hf_cache_dir=self.hf_cache_dir, model_path=self.asr_model_path)
 
     def export_wav(self, wav, file_wave, remove_silence=False):
         sf.write(file_wave, wav, self.target_sample_rate)
@@ -121,7 +127,7 @@ class F5TTS:
         seed_everything(seed)
         self.seed = seed
 
-        ref_file, ref_text = preprocess_ref_audio_text(ref_file, ref_text, device=self.device)
+        ref_file, ref_text = preprocess_ref_audio_text(ref_file, ref_text, device=self.device, hf_cache_dir=self.hf_cache_dir, model_path=self.asr_model_path)
 
         wav, sr, spect = infer_process(
             ref_file,

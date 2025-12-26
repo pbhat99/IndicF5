@@ -48,6 +48,20 @@ if audio.dtype == np.int16:
 sf.write("samples/namaste.wav", np.array(audio, dtype=np.float32), samplerate=24000)
 ```
 
+## 💻 Gradio UI
+
+We provide a simple Gradio UI for ease of use.
+
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Run the App:
+   ```bash
+   python app.py
+   ```
+
 ## References
 
 We would like to extend our gratitude to the authors of  **[F5-TTS](https://github.com/SWivid/F5-TTS)** for their invaluable contributions and inspiration to this work. Their efforts have played a crucial role in advancing  the field of text-to-speech synthesis.

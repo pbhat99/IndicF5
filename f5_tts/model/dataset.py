@@ -153,7 +153,13 @@ class CustomDataset(Dataset):
         if self.preprocessed_mel:
             mel_spec = torch.tensor(row["mel_spec"])
         else:
-            audio, source_sample_rate = torchaudio.load(audio_path)
+            import soundfile as sf
+            audio_np, source_sample_rate = sf.read(audio_path)
+            if len(audio_np.shape) == 1:
+                audio_np = audio_np[None, :]
+            else:
+                audio_np = audio_np.T
+            audio = torch.from_numpy(audio_np).float()
 
             # make sure mono input
             if audio.shape[0] > 1:

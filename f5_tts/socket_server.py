@@ -2,6 +2,7 @@ import socket
 import struct
 import torch
 import torchaudio
+import soundfile as sf
 from threading import Thread
 
 
@@ -14,8 +15,10 @@ from model.backbones.dit import DiT
 
 
 class TTSStreamingProcessor:
-    def __init__(self, ckpt_file, vocab_file, ref_audio, ref_text, device=None, dtype=torch.float32):
+    def __init__(self, ckpt_file, vocab_file, ref_audio, ref_text, device=None, dtype=torch.float32, hf_cache_dir=None, asr_model_path=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.asr_model_path = asr_model_path
+        self.hf_cache_dir = hf_cache_dir
 
         # Load the model using the provided checkpoint and vocab files
         self.model = load_model(
@@ -30,7 +33,11 @@ class TTSStreamingProcessor:
         ).to(self.device, dtype=dtype)
 
         # Load the vocoder
-        self.vocoder = load_vocoder(is_local=False)
+        is_local_vocoder = False
+        if hf_cache_dir and os.path.exists(os.path.join(hf_cache_dir, "config.yaml")):
+            is_local_vocoder = True
+        
+        self.vocoder = load_vocoder(is_local=is_local_vocoder, local_path=hf_cache_dir if is_local_vocoder else None, device=self.device, hf_cache_dir=hf_cache_dir)
 
         # Set sampling rate for streaming
         self.sampling_rate = 24000  # Consistency with client
@@ -45,8 +52,15 @@ class TTSStreamingProcessor:
     def _warm_up(self):
         """Warm up the model with a dummy input to ensure it's ready for real-time processing."""
         print("Warming up the model...")
-        ref_audio, ref_text = preprocess_ref_audio_text(self.ref_audio, self.ref_text)
-        audio, sr = torchaudio.load(ref_audio)
+        ref_audio, ref_text = preprocess_ref_audio_text(self.ref_audio, self.ref_text, hf_cache_dir=self.hf_cache_dir, model_path=self.asr_model_path)
+        
+        audio_np, sr = sf.read(ref_audio)
+        if len(audio_np.shape) == 1:
+            audio_np = audio_np[None, :]
+        else:
+            audio_np = audio_np.T
+        audio = torch.from_numpy(audio_np).float()
+        
         gen_text = "Warm-up text for the model."
 
         # Pass the vocoder as an argument here
@@ -56,10 +70,15 @@ class TTSStreamingProcessor:
     def generate_stream(self, text, play_steps_in_s=0.5):
         """Generate audio in chunks and yield them in real-time."""
         # Preprocess the reference audio and text
-        ref_audio, ref_text = preprocess_ref_audio_text(self.ref_audio, self.ref_text)
+        ref_audio, ref_text = preprocess_ref_audio_text(self.ref_audio, self.ref_text, hf_cache_dir=self.hf_cache_dir, model_path=self.asr_model_path)
 
         # Load reference audio
-        audio, sr = torchaudio.load(ref_audio)
+        audio_np, sr = sf.read(ref_audio)
+        if len(audio_np.shape) == 1:
+            audio_np = audio_np[None, :]
+        else:
+            audio_np = audio_np.T
+        audio = torch.from_numpy(audio_np).float()
 
         # Run inference for the input text
         audio_chunk, final_sample_rate, _ = infer_batch_process(
@@ -138,21 +157,50 @@ def start_server(host, port, processor):
 
 if __name__ == "__main__":
     try:
-        # Load the model and vocoder using the provided files
-        ckpt_file = ""  # pointing your checkpoint "ckpts/model/model_1096.pt"
-        vocab_file = ""  # Add vocab file path if needed
-        ref_audio = ""  # add ref audio"./tests/ref_audio/reference.wav"
-        ref_text = ""
+        import os
+        
+        REPO_ID = "ai4bharat/IndicF5"
+        MODEL_DIR = "model"
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        
+        ckpt_file = os.path.join(MODEL_DIR, "model.safetensors")
+        vocab_file = os.path.join(MODEL_DIR, "vocab.txt")
+        if not os.path.exists(vocab_file):
+             vocab_file = os.path.join(MODEL_DIR, "checkpoints", "vocab.txt")
+
+        if not os.path.exists(ckpt_file) or not os.path.exists(vocab_file):
+            print(f"Downloading/Locating model files in {MODEL_DIR}...")
+            try:
+                from huggingface_hub import hf_hub_download
+                ckpt_file = hf_hub_download(repo_id=REPO_ID, filename="model.safetensors", local_dir=MODEL_DIR)
+                vocab_file = hf_hub_download(repo_id=REPO_ID, filename="checkpoints/vocab.txt", local_dir=MODEL_DIR)
+            except ImportError:
+                 print("huggingface_hub not installed. Please ensure models are present in 'model' directory.")
+        
+        # Check for local ASR model (Whisper)
+        asr_model_path = None
+        # Common local paths for whisper
+        possible_asr_paths = [os.path.join(MODEL_DIR, "whisper-large-v3-turbo"), os.path.join(MODEL_DIR, "asr")]
+        for p in possible_asr_paths:
+            if os.path.exists(p):
+                asr_model_path = p
+                print(f"Found local ASR model at {p}")
+                break
 
         # Initialize the processor with the model and vocoder
         processor = TTSStreamingProcessor(
             ckpt_file=ckpt_file,
             vocab_file=vocab_file,
-            ref_audio=ref_audio,
-            ref_text=ref_text,
+            ref_audio="",  # add ref audio"./tests/ref_audio/reference.wav"
+            ref_text="",
+            device=None,
             dtype=torch.float32,
+            hf_cache_dir=os.path.join(MODEL_DIR, "vocos"),
+            asr_model_path=asr_model_path
         )
-
+        # Note: TTSStreamingProcessor doesn't currently take hf_cache_dir, 
+        # it would need modification if we want vocoder also in 'model/'
+        
         # Start the server
         start_server("0.0.0.0", 9998, processor)
     except KeyboardInterrupt:
